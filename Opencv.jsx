@@ -290,7 +290,7 @@ function Opencv() {
 
     return (
         <>
-            <Script async onLoad={onLoad} src="/opencv.js" />
+            <Script async onLoad={onLoad} src="./opencv.js" />
             <canvas id="canvas_output"></canvas>
 
             <video ref={videoRef} id="cam_input" hidden></video>
