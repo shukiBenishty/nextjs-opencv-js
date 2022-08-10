@@ -128,6 +128,20 @@ function filter2DSharp(src, dst = new cv.Mat()) {
     return dst;
 }
 
+function biggestContour(contours) {
+    let poly = new cv.MatVector();
+    let index = 0;
+    let maxArea = 0
+    for (let i = 0; i < contours.size(); i++) {
+        let cnt = contours.get(i);
+        let area = cv.contourArea(cnt)
+        if (area > maxArea)
+            index = i;
+    }
+    poly.push_back(contours.get(index))
+    return poly
+}
+
 function findContours(contours, minArea, maxArea, epsilonFactor = 0.02) {
     let poly = new cv.MatVector();
     //to many edges
@@ -287,12 +301,13 @@ function Opencv() {
                 let doc = findDoc(dst);
 
                 if (doc && doc.size() > 0) {
+                    doc = biggestContour(doc)
                     cv.cvtColor(dst, dst, cv.COLOR_BGR2RGB);
                     cv.drawContours(dst, doc, -1, color, 2);
                     cv.cvtColor(dst, dst, cv.COLOR_RGB2BGR);
                 }
 
-                cv.imshow('canvas_output', dst);            
+                cv.imshow('canvas_output', dst);
 
 
                 // schedule next one.
