@@ -61,24 +61,24 @@ const FPS = 10;
 //     return matVec;
 // }
 
-// function drawCanvas(title, img) {
-//     var canvas = document.getElementById(`canvas-${title}`);
-//     if (!canvas) {
-//         var parent = document.createElement("div");
-//         var div = document.createElement("div");
-//         var text = document.createTextNode(title);
-//         var canvas = document.createElement("canvas", {});
-//         canvas.setAttribute("id", `canvas-${title}`)
-//         div.appendChild(text)
-//         parent.appendChild(canvas)
-//         parent.appendChild(div)
+function drawCanvas(title, img) {
+    var canvas = document.getElementById(`canvas-${title}`);
+    if (!canvas) {
+        var parent = document.createElement("div");
+        var div = document.createElement("div");
+        var text = document.createTextNode(title);
+        var canvas = document.createElement("canvas", {});
+        canvas.setAttribute("id", `canvas-${title}`)
+        div.appendChild(text)
+        parent.appendChild(canvas)
+        parent.appendChild(div)
 
-//         var outputDiv = document.getElementById("output");
-//         outputDiv.appendChild(parent);
-//     }
+        var outputDiv = document.getElementById("output");
+        outputDiv.appendChild(parent);
+    }
 
-//     cv.imshow(`canvas-${title}`, img);
-// }
+    cv.imshow(`canvas-${title}`, img);
+}
 
 // function morphologyClose(src, dst = new cv.Mat()) {
 //     let kernel = cv.Mat.ones(2, 2, cv.CV_8U)
@@ -130,6 +130,10 @@ function filter2DSharp(src, dst = new cv.Mat()) {
 
 function findContours(contours, minArea, maxArea, epsilonFactor = 0.02) {
     let poly = new cv.MatVector();
+    //to many edges
+    if (contours.size() > 200) {
+        return poly;
+    }
     for (let i = 0; i < contours.size(); i++) {
         let cnt = contours.get(i);
         let area = cv.contourArea(cnt)
@@ -144,9 +148,116 @@ function findContours(contours, minArea, maxArea, epsilonFactor = 0.02) {
         poly.push_back(tmp)
     }
     return poly
-
 }
 
+
+
+function findDoc(img) {
+    const maxArea = img.matSize[0] * img.matSize[1] * 0.95
+    const minArea = img.matSize[0] * img.matSize[1] * 0.1
+    const anchor = new cv.Point(-1, -1);
+    const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+    let sharp = new cv.Mat()
+    let gray = new cv.Mat()
+    let canny = new cv.Mat()
+    let dilate = new cv.Mat()
+    let histo = new cv.Mat()
+    let mBlur = new cv.Mat()
+    let bw = new cv.Mat()
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+
+
+    let doc;
+    try {
+
+        sharp = filter2DSharp(img)
+        // drawCanvas("sharp", sharp);
+
+        cv.cvtColor(sharp, gray, cv.COLOR_RGBA2GRAY, 0);
+        cv.Canny(gray, canny, 60, 180, 3, false);
+        // drawCanvas("canny", canny)
+
+        //find rect for sharp close edge
+        cv.findContours(canny, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        let doc = findContours(contours, minArea, maxArea);
+
+        if (doc.size() > 0)
+            return doc;
+
+        cv.dilate(canny, dilate, kernel, anchor, 2)
+        // drawCanvas("dilate", dilate)
+
+        cv.findContours(dilate, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        doc = findContours(contours, minArea, maxArea);
+        if (doc.size() > 0)
+            return doc;
+
+        auto_canny(gray, canny)
+        // drawCanvas("auto_canny", canny)
+
+        cv.findContours(canny, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        let c = findContours(contours, minArea, maxArea);
+        if (doc.size() > 0)
+            return doc;
+
+        cv.dilate(canny, dilate, kernel, anchor, 2)
+        // drawCanvas("auto_canny + dilate", dilate)
+
+        cv.findContours(dilate, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        c = findContours(contours, minArea, maxArea);
+        if (doc.size() > 0)
+            return doc;
+
+        equalizeHistogram(sharp, histo);
+        // drawCanvas("histo", histo);
+        cv.medianBlur(histo, mBlur, 5)
+        // drawCanvas("mBlur", mBlur)
+        cv.threshold(mBlur, bw, 230, 255, cv.THRESH_BINARY)
+
+        cv.findContours(dilate, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        c = findContours(contours, minArea, maxArea);
+
+
+    } catch (error) {
+        console.log(error);
+    } finally {
+        sharp.delete();
+        gray.delete();
+        canny.delete();
+        dilate.delete();
+        histo.delete();
+        mBlur.delete();
+        bw.delete();
+        contours.delete();
+        hierarchy.delete();
+        // anchor.delete();
+        kernel.delete();
+        // color.delete();
+    }
+    return doc;
+}
+
+function median(values) {
+    if (values.length === 0) throw new Error("No inputs");
+    values.sort(function (a, b) {
+        return a - b;
+    });
+    var half = Math.floor(values.length / 2);
+    if (values.length % 2)
+        return values[half];
+    return (values[half - 1] + values[half]) / 2.0;
+}
+
+function auto_canny(img, dst = new cv.Mat(), sigma = 0) {
+    let v = median(img.data)
+
+    let lower = Math.floor(Math.max(0, (1.0 - sigma) * v))
+    let upper = Math.floor(Math.max(255, (1.0 + sigma) * v))
+    cv.Canny(img, dst, lower, upper, 3, false)
+
+    return dst
+}
 
 function Opencv() {
 
@@ -161,7 +272,7 @@ function Opencv() {
             const MAX_DIM = 640;
             const src = new cv.Mat(resolution.h, resolution.w, cv.CV_8UC4);
             const cap = new cv.VideoCapture("cam_input")
-
+            const color = new cv.Scalar(0, 255, 0)
 
 
             let timer;
@@ -169,82 +280,21 @@ function Opencv() {
             function processVideo() {
                 let begin = Date.now();
                 let dst = new cv.Mat();
-                let sharp = new cv.Mat()
-                let gray = new cv.Mat()
-                let canny = new cv.Mat()
-                let dilate = new cv.Mat()
-                let histo = new cv.Mat()
-                let mBlur = new cv.Mat()
-                let bw = new cv.Mat()
-                let contours = new cv.MatVector();
-                let hierarchy = new cv.Mat();
-                let anchor = new cv.Point(-1, -1);
-                let kernel = cv.Mat.ones(3, 3, cv.CV_8U);
-                let color = new cv.Scalar(0, 255, 0)
-                try {
 
-        
-                    cap.read(src);
+                cap.read(src);
+                resize(src, dst, MAX_DIM);
 
-                    // 1
-                    resize(src, dst, MAX_DIM);
-                    let maxArea = dst.matSize[0] * dst.matSize[1] * 0.95
-                    let minArea = dst.matSize[0] * dst.matSize[1] * 0.1
+                let doc = findDoc(dst);
 
-                    // 2
-                    sharp = filter2DSharp(dst)
-                    // drawCanvas("sharp", sharp);
-
-                    // 3
-                    cv.cvtColor(sharp, gray, cv.COLOR_RGBA2GRAY, 0);
-                    cv.Canny(gray, canny, 60, 180, 3, false);
-                    // drawCanvas("canny", canny)
-
-                    //find rect for sharp close edge
-                    cv.findContours(canny, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-                    let c = findContours(contours, minArea, maxArea);
-
-                    if (c.size() < 1) {
-                        cv.dilate(canny, dilate, kernel, anchor, 2)
-                        // drawCanvas("dilate", dilate)
-                        cv.findContours(dilate, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-
-                        c = findContours(contours, minArea, maxArea);
-                        if (c.size() < 1) {
-                            equalizeHistogram(sharp, histo);
-                            // drawCanvas("histo", histo);
-                            cv.medianBlur(histo, mBlur, 5)
-                            // drawCanvas("mBlur", mBlur)
-                            cv.threshold(mBlur, bw, 230, 255, cv.THRESH_BINARY)
-
-                            cv.findContours(dilate, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-                            c = findContours(contours, minArea, maxArea);
-                        }
-                    }
-
-
+                if (doc && doc.size() > 0) {
                     cv.cvtColor(dst, dst, cv.COLOR_BGR2RGB);
-                    cv.drawContours(dst, c, -1, color, 2);
+                    cv.drawContours(dst, doc, -1, color, 2);
                     cv.cvtColor(dst, dst, cv.COLOR_RGB2BGR);
-                    cv.imshow('canvas_output', dst);
-
-                } catch (error) {
-                    console.log(error);
-                }finally{
-                    dst.delete();
-                    sharp.delete();
-                    gray.delete();
-                    canny.delete();
-                    dilate.delete();
-                    histo.delete();
-                    mBlur.delete();
-                    bw.delete();
-                    contours.delete();
-                    hierarchy.delete();
-                    // anchor.delete();
-                    kernel.delete();
-                    // color.delete();
                 }
+
+                cv.imshow('canvas_output', dst);            
+
+
                 // schedule next one.
                 let delay = 1000 / FPS - (Date.now() - begin);
                 timer = setTimeout(processVideo, delay);
@@ -289,12 +339,12 @@ function Opencv() {
     }
 
     return (
-        <>
+        <div id="output">
             <Script async onLoad={onLoad} src="./opencv.js" />
             <canvas id="canvas_output"></canvas>
 
             <video ref={videoRef} id="cam_input" hidden></video>
-        </>
+        </div>
     )
 }
 
