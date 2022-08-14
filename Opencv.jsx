@@ -112,6 +112,7 @@ function resize(src, dst, MAX_DIM = 320) {
     let scale = 1.0 * MAX_DIM / Math.max(src.matSize[0], src.matSize[1])
     let dsize = new cv.Size(src.matSize[1] * scale, src.matSize[0] * scale);
     cv.resize(src, dst, dsize, 0, 0, cv.INTER_AREA);
+    return scale;
 }
 
 function equalizeHistogram(src, dst) {
@@ -159,12 +160,34 @@ function findContours(contours, minArea, maxArea, epsilonFactor = 0.02) {
         if (tmp.total() !== 4) {
             continue;
         }
+        const {height, width} = cv.boundingRect(tmp)
+        if ((area)/(height * width) < 0.6) {
+            continue;
+        }
         poly.push_back(tmp)
     }
     return poly
 }
 
+function reorder(points) {
+    let sumCord = points.sort((p1, p2) => (p1[0] + p1[1]) - (p2[0] + p2[1]));
+    // Top - left point will have the smallest sum.
+    let leftUp = sumCord[0];
+    // Bottom - right point will have the largest sum.
+    let rightDown = sumCord[3];
+    // sumCord.forEach(p => console.log(p[0], p[1], p[0] + p[1]))
 
+    let subCord = points.sort((p1, p2) => (p1[0] - p1[1]) - (p2[0] - p2[1]));
+    // Top - right point will have the smallest difference.
+    let rightUp = subCord[0];
+    // Bottom - left will have the largest difference.
+    let leftDown = subCord[3];
+    // subCord.forEach(p => console.log(p[0], p[1], p[0] - p[1]));
+
+
+    //i am not shore about the order "but it's work" 
+    return [leftUp, leftDown, rightUp, rightDown]
+}
 
 function findDoc(img) {
     const maxArea = img.matSize[0] * img.matSize[1] * 0.95
@@ -190,7 +213,7 @@ function findDoc(img) {
 
         cv.cvtColor(sharp, gray, cv.COLOR_RGBA2GRAY, 0);
         cv.Canny(gray, canny, 60, 180, 3, false);
-        // drawCanvas("canny", canny)
+        drawCanvas("canny", canny)
 
         //find rect for sharp close edge
         cv.findContours(canny, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
@@ -200,7 +223,7 @@ function findDoc(img) {
             return doc;
 
         cv.dilate(canny, dilate, kernel, anchor, 2)
-        // drawCanvas("dilate", dilate)
+        drawCanvas("dilate", dilate)
 
         cv.findContours(dilate, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
         doc = findContours(contours, minArea, maxArea);
@@ -208,18 +231,18 @@ function findDoc(img) {
             return doc;
 
         auto_canny(gray, canny)
-        // drawCanvas("auto_canny", canny)
+        drawCanvas("auto_canny", canny)
 
         cv.findContours(canny, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-        let c = findContours(contours, minArea, maxArea);
+        doc = findContours(contours, minArea, maxArea);
         if (doc.size() > 0)
             return doc;
 
         cv.dilate(canny, dilate, kernel, anchor, 2)
-        // drawCanvas("auto_canny + dilate", dilate)
+        drawCanvas("auto_canny + dilate", dilate)
 
         cv.findContours(dilate, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-        c = findContours(contours, minArea, maxArea);
+        doc = findContours(contours, minArea, maxArea);
         if (doc.size() > 0)
             return doc;
 
@@ -229,8 +252,8 @@ function findDoc(img) {
         // drawCanvas("mBlur", mBlur)
         cv.threshold(mBlur, bw, 230, 255, cv.THRESH_BINARY)
 
-        cv.findContours(dilate, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-        c = findContours(contours, minArea, maxArea);
+        cv.findContours(bw, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        doc = findContours(contours, minArea, maxArea);
 
 
     } catch (error) {
@@ -286,8 +309,12 @@ function Opencv() {
             const MAX_DIM = 640;
             const src = new cv.Mat(resolution.h, resolution.w, cv.CV_8UC4);
             const cap = new cv.VideoCapture("cam_input")
+            const crop = new cv.Mat();
             const color = new cv.Scalar(0, 255, 0)
 
+            // const d_w = 320;
+            // const d_h = 160;
+            // const dsize = new cv.Size(d_w, d_h);
 
             let timer;
 
@@ -296,7 +323,7 @@ function Opencv() {
                 let dst = new cv.Mat();
 
                 cap.read(src);
-                resize(src, dst, MAX_DIM);
+                const scale = resize(src, dst, MAX_DIM);
 
                 let doc = findDoc(dst);
 
@@ -305,6 +332,29 @@ function Opencv() {
                     cv.cvtColor(dst, dst, cv.COLOR_BGR2RGB);
                     cv.drawContours(dst, doc, -1, color, 2);
                     cv.cvtColor(dst, dst, cv.COLOR_RGB2BGR);
+
+                    let pointsArry = doc.get(0).data32S;
+                    let points = [];
+                    for (let i = 0; i < pointsArry.length; i += 2) {
+                        points.push([pointsArry[i], pointsArry[i + 1]]);
+                    }
+                    points = reorder(points, 20);
+                    const flatScalePoints = points.flatMap(num => num).map(num => num / scale);
+
+                    const [x1, y1] = [flatScalePoints[0], flatScalePoints[1]];
+                    const [x2, y2] = [flatScalePoints[2], flatScalePoints[3]];
+                    const [x3, y3] = [flatScalePoints[4], flatScalePoints[5]];
+                    let d_w = (((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5);
+                    let d_h = (((x1 - x3) ** 2 + (y1 - y3) ** 2) ** 0.5);
+                    let dsize = new cv.Size(d_w, d_h);
+
+
+                    let pts1 = cv.matFromArray(4, 1, cv.CV_32FC2, flatScalePoints);
+                    let pts2 = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, d_w, 0, 0, d_h, d_w, d_h]);
+                    let M = cv.getPerspectiveTransform(pts1, pts2);
+                    // You can try more different parameters
+                    cv.warpPerspective(src, crop, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+                    drawCanvas("Crop", crop)
                 }
 
                 cv.imshow('canvas_output', dst);
