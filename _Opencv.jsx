@@ -1,5 +1,5 @@
 import Script from 'next/script'
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 
 const FPS = 10;
@@ -160,8 +160,8 @@ function findContours(contours, minArea, maxArea, epsilonFactor = 0.02) {
         if (tmp.total() !== 4) {
             continue;
         }
-        const { height, width } = cv.boundingRect(tmp)
-        if ((area) / (height * width) < 0.6) {
+        const {height, width} = cv.boundingRect(tmp)
+        if ((area)/(height * width) < 0.6) {
             continue;
         }
         poly.push_back(tmp)
@@ -213,7 +213,7 @@ function findDoc(img) {
 
         cv.cvtColor(sharp, gray, cv.COLOR_RGBA2GRAY, 0);
         cv.Canny(gray, canny, 60, 180, 3, false);
-        // drawCanvas("canny", canny)
+        drawCanvas("canny", canny)
 
         //find rect for sharp close edge
         cv.findContours(canny, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
@@ -223,7 +223,7 @@ function findDoc(img) {
             return doc;
 
         cv.dilate(canny, dilate, kernel, anchor, 2)
-        // drawCanvas("dilate", dilate)
+        drawCanvas("dilate", dilate)
 
         cv.findContours(dilate, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
         doc = findContours(contours, minArea, maxArea);
@@ -231,7 +231,7 @@ function findDoc(img) {
             return doc;
 
         auto_canny(gray, canny)
-        // drawCanvas("auto_canny", canny)
+        drawCanvas("auto_canny", canny)
 
         cv.findContours(canny, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
         doc = findContours(contours, minArea, maxArea);
@@ -239,7 +239,7 @@ function findDoc(img) {
             return doc;
 
         cv.dilate(canny, dilate, kernel, anchor, 2)
-        // drawCanvas("auto_canny + dilate", dilate)
+        drawCanvas("auto_canny + dilate", dilate)
 
         cv.findContours(dilate, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
         doc = findContours(contours, minArea, maxArea);
@@ -296,68 +296,119 @@ function auto_canny(img, dst = new cv.Mat(), sigma = 0) {
     return dst
 }
 
-function Opencv({ img }) {
+function Opencv() {
+
+    const [cameraOpen, setCameraOpen] = useState(false)
+    const [init, setInit] = useState(false)
+    const [resolution, setResolution] = useState(null)
+
+    const videoRef = useRef()
+
+    useEffect(() => {
+        if (cameraOpen && init && resolution) {
+            const MAX_DIM = 640;
+            const src = new cv.Mat(resolution.h, resolution.w, cv.CV_8UC4);
+            const cap = new cv.VideoCapture("cam_input")
+            const crop = new cv.Mat();
+            const color = new cv.Scalar(0, 255, 0)
+
+            // const d_w = 320;
+            // const d_h = 160;
+            // const dsize = new cv.Size(d_w, d_h);
+
+            let timer;
+
+            function processVideo() {
+                let begin = Date.now();
+                let dst = new cv.Mat();
+
+                cap.read(src);
+                const scale = resize(src, dst, MAX_DIM);
+
+                let doc = findDoc(dst);
+
+                if (doc && doc.size() > 0) {
+                    doc = biggestContour(doc)
+                    cv.cvtColor(dst, dst, cv.COLOR_BGR2RGB);
+                    cv.drawContours(dst, doc, -1, color, 2);
+                    cv.cvtColor(dst, dst, cv.COLOR_RGB2BGR);
+
+                    let pointsArry = doc.get(0).data32S;
+                    let points = [];
+                    for (let i = 0; i < pointsArry.length; i += 2) {
+                        points.push([pointsArry[i], pointsArry[i + 1]]);
+                    }
+                    points = reorder(points, 20);
+                    const flatScalePoints = points.flatMap(num => num).map(num => num / scale);
+
+                    const [x1, y1] = [flatScalePoints[0], flatScalePoints[1]];
+                    const [x2, y2] = [flatScalePoints[2], flatScalePoints[3]];
+                    const [x3, y3] = [flatScalePoints[4], flatScalePoints[5]];
+                    let d_w = (((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5);
+                    let d_h = (((x1 - x3) ** 2 + (y1 - y3) ** 2) ** 0.5);
+                    let dsize = new cv.Size(d_w, d_h);
 
 
-    const processImg = () => {
-        const MAX_DIM = 640;
-        const src = cv.imread(img);
-        // drawCanvas("src", src)
-        const crop = new cv.Mat();
-        const color = new cv.Scalar(0, 255, 0)
+                    let pts1 = cv.matFromArray(4, 1, cv.CV_32FC2, flatScalePoints);
+                    let pts2 = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, d_w, 0, 0, d_h, d_w, d_h]);
+                    let M = cv.getPerspectiveTransform(pts1, pts2);
+                    // You can try more different parameters
+                    cv.warpPerspective(src, crop, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+                    drawCanvas("Crop", crop)
+                }
 
-        let dst = new cv.Mat();
+                cv.imshow('canvas_output', dst);
 
-        const scale = resize(src, dst, MAX_DIM);
 
-        let doc = findDoc(dst);
-
-        if (doc && doc.size() > 0) {
-            doc = biggestContour(doc)
-            cv.cvtColor(dst, dst, cv.COLOR_BGR2RGB);
-            cv.drawContours(dst, doc, -1, color, 2);
-            cv.cvtColor(dst, dst, cv.COLOR_RGB2BGR);
-
-            let pointsArry = doc.get(0).data32S;
-            let points = [];
-            for (let i = 0; i < pointsArry.length; i += 2) {
-                points.push([pointsArry[i], pointsArry[i + 1]]);
+                // schedule next one.
+                let delay = 1000 / FPS - (Date.now() - begin);
+                timer = setTimeout(processVideo, delay);
             }
-            points = reorder(points, 20);
-            const flatScalePoints = points.flatMap(num => num).map(num => num / scale);
+            // schedule first one.
+            timer = setTimeout(processVideo, 0);
 
-            const [x1, y1] = [flatScalePoints[0], flatScalePoints[1]];
-            const [x2, y2] = [flatScalePoints[2], flatScalePoints[3]];
-            const [x3, y3] = [flatScalePoints[4], flatScalePoints[5]];
-            let d_w = (((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5);
-            let d_h = (((x1 - x3) ** 2 + (y1 - y3) ** 2) ** 0.5);
-            let dsize = new cv.Size(d_w, d_h);
-
-
-            let pts1 = cv.matFromArray(4, 1, cv.CV_32FC2, flatScalePoints);
-            let pts2 = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, d_w, 0, 0, d_h, d_w, d_h]);
-            let M = cv.getPerspectiveTransform(pts1, pts2);
-            // You can try more different parameters
-            cv.warpPerspective(src, crop, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-            drawCanvas("Crop", crop)
+            return () => clearTimeout(timer);
         }
-
-        cv.imshow('canvas_output', dst);
-    }
+    }, [cameraOpen, init, resolution])
 
     const onLoad = () => {
         // initOpenCv
         console.log("opencv loaded");
         cv['onRuntimeInitialized'] = () => {
             console.log("opencv initialized");
-            processImg();
+            setInit(true);
         };
+
+        //openCamera
+        navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                width: { min: 1024, ideal: 1280, max: 1920 },
+                height: { min: 576, ideal: 720, max: 1080 },
+                frameRate: { ideal: 10, max: FPS },
+                facingMode: "environment",
+            }
+        }).then(function (stream) {
+            //set video h, w
+            let setting = stream.getVideoTracks()[0].getSettings()
+            setResolution({ w: setting.width, h: setting.height })
+            videoRef.current.setAttribute('width', setting.width)
+            videoRef.current.setAttribute('height', setting.height)
+            videoRef.current.srcObject = stream;
+            videoRef.current.play();
+
+            setCameraOpen(true);
+        }).catch(function (err) {
+            console.log("An error occurred! " + err);
+        });
     }
 
     return (
         <div id="output">
             <Script async onLoad={onLoad} src="./opencv.js" />
             <canvas id="canvas_output"></canvas>
+
+            <video ref={videoRef} id="cam_input" hidden></video>
         </div>
     )
 }
